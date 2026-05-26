@@ -1,0 +1,124 @@
+// ============================================================
+// Prisma Schema - Carnet Digital CUC
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Tipos de usuario del sistema
+// ============================================================
+model TipoUsuario {
+  id       Int       @id @default(autoincrement())
+  nombre   String    @unique @db.VarChar(50)
+  usuarios Usuario[]
+
+  @@map("tipos_usuario")
+}
+
+// ============================================================
+// Usuarios del sistema (temporal hasta SRV10)
+// ============================================================
+model Usuario {
+  id            String               @id @default(uuid())
+  email         String               @unique @db.VarChar(255)
+  username      String               @unique @db.VarChar(100)
+  password      String               @db.VarChar(255)
+  nombre        String               @db.VarChar(100)
+  apellido      String               @db.VarChar(100)
+  activo        Boolean              @default(true)
+  tipoUsuarioId Int                  @map("tipo_usuario_id")
+  tipoUsuario   TipoUsuario          @relation(fields: [tipoUsuarioId], references: [id])
+  instituciones UsuarioInstitucion[]
+  refreshTokens RefreshToken[]
+  bitacoras     Bitacora[]
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  @@map("usuarios")
+}
+
+// ============================================================
+// Instituciones educativas
+// ============================================================
+model Institucion {
+  id        String               @id @default(uuid())
+  nombre    String               @db.VarChar(200)
+  codigo    String               @unique @db.VarChar(50)
+  activo    Boolean              @default(true)
+  usuarios  UsuarioInstitucion[]
+  createdAt DateTime             @default(now()) @map("created_at")
+  updatedAt DateTime             @updatedAt @map("updated_at")
+
+  @@map("instituciones")
+}
+
+// ============================================================
+// Relación N:N usuarios <-> instituciones
+// ============================================================
+model UsuarioInstitucion {
+  id            String      @id @default(uuid())
+  usuarioId     String      @map("usuario_id")
+  institucionId String      @map("institucion_id")
+  usuario       Usuario     @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  institucion   Institucion @relation(fields: [institucionId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@unique([usuarioId, institucionId])
+  @@map("usuarios_instituciones")
+}
+
+// ============================================================
+// Refresh tokens - soporta revocación y rotación
+// ============================================================
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique @db.VarChar(500)
+  usuarioId String   @map("usuario_id")
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  revocado  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([token])
+  @@index([usuarioId])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// Pantallas del sistema (SRV7 - preparado)
+// ============================================================
+model Pantalla {
+  id          String   @id @default(uuid())
+  nombre      String   @db.VarChar(100)
+  descripcion String?  @db.VarChar(500)
+  ruta        String   @unique @db.VarChar(200)
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("pantallas")
+}
+
+// ============================================================
+// Bitácora de auditoría (SRV9 - preparado)
+// ============================================================
+model Bitacora {
+  id          String   @id @default(uuid())
+  usuarioId   String   @map("usuario_id")
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id])
+  descripcion String   @db.VarChar(500)
+  accion      String   @db.VarChar(100)
+  ip          String?  @db.VarChar(50)
+  fecha       DateTime @default(now())
+
+  @@index([usuarioId])
+  @@index([fecha])
+  @@map("bitacoras")
+}

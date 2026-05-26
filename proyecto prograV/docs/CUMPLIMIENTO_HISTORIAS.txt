@@ -1,0 +1,270 @@
+================================================================
+  CARNET DIGITAL CUC — CUMPLIMIENTO DE HISTORIAS DE USUARIO
+  Backend NestJS + Prisma + MySQL + JWT
+================================================================
+
+----------------------------------------------------------------
+  HISTORIA SRV1 — MICROSERVICIO DE LOGIN / AUTENTICACIÓN
+  Estado: IMPLEMENTADA COMPLETAMENTE
+----------------------------------------------------------------
+
+DESCRIPCIÓN:
+  Autenticar usuarios del sistema mediante email o username,
+  validar contraseña y tipo de usuario, y emitir tokens JWT
+  de acceso y refresco.
+
+ENDPOINTS IMPLEMENTADOS:
+
+  1. POST /api/v1/auth/login
+     - Archivo: src/auth/auth.controller.ts  (línea 35)
+     - Lógica:  src/auth/auth.service.ts     (método login)
+     - DTO:     src/auth/dto/login.dto.ts
+
+     Qué hace:
+       • Recibe: { usuario, password, tipoUsuario }
+       • Busca al usuario por EMAIL o USERNAME en MySQL
+         (src/users/users.repository.ts → findByEmailOrUsername)
+       • Valida que el usuario exista y esté activo
+       • Valida que el tipoUsuario coincida (ADMIN/ESTUDIANTE/FUNCIONARIO)
+       • Compara contraseña con bcrypt.compare()
+         (src/shared/utils/bcrypt.util.ts)
+       • Si es correcto → genera access_token JWT (5 min por defecto)
+       • Genera refresh_token UUID y lo guarda en tabla refresh_tokens
+         (src/auth/repositories/refresh-token.repository.ts)
+       • Retorna exactamente:
+           {
+             "expires_in":    "300",
+             "access_token":  "eyJ...",
+             "refresh_token": "uuid-v4",
+             "usuarioID":     "uuid",
+             "institutions":  [{ id, nombre, codigo }]
+           }
+       • En caso de fallo → 401 con mensaje genérico
+           "Usuario y/o contraseña incorrectos"
+         (nunca revela si el usuario existe o no → seguridad)
+
+     Validaciones del DTO (class-validator):
+       • usuario:     requerido, no vacío, se aplica trim()
+       • password:    requerido, mínimo 6 caracteres
+       • tipoUsuario: requerido, se convierte a mayúsculas automáticamente
+
+  2. POST /api/v1/auth/refresh
+     - Archivo: src/auth/auth.controller.ts  (línea 55)
+     - Lógica:  src/auth/auth.service.ts     (método refresh)
+     - DTO:     src/auth/dto/refresh-token.dto.ts
+
+     Qué hace:
+       • Recibe: { refresh_token }
+       • Busca el token en la tabla refresh_tokens de MySQL
+       • Valida que no esté revocado y que no haya expirado
+       • Revoca el token antiguo (rotación de tokens)
+       • Genera un nuevo access_token JWT
+       • Genera un nuevo refresh_token UUID (guarda en DB)
+       • Retorna: { expires_in, access_token, refresh_token }
+       • Si el token es inválido/expirado/revocado → 401
+
+     Características de seguridad:
+       • Rotación: cada refresh invalida el token anterior
+       • Revocación: campo "revocado" en DB permite invalidar tokens
+       • Expiración configurable via JWT_REFRESH_EXPIRES_IN
+
+  3. GET /api/v1/auth/validate
+     - Archivo: src/auth/auth.controller.ts (línea 70)
+     - Lógica:  src/auth/auth.service.ts    (método validateToken)
+     - Guard:   src/auth/guards/jwt-auth.guard.ts
+
+     Qué hace:
+       • Requiere header: Authorization: Bearer <access_token>
+       • El JwtAuthGuard verifica la firma y expiración del JWT
+       • Si válido  → HTTP 200, retorna: true
+       • Si inválido→ HTTP 401 con mensaje específico:
+           - "El token ha expirado"
+           - "Token inválido"
+
+COMPONENTES JWT:
+
+  • src/auth/strategies/jwt.strategy.ts
+      Extrae el token del header Authorization, verifica con la
+      clave secreta (JWT_SECRET del .env) y devuelve el payload
+      al request como req.user
+
+  • src/auth/guards/jwt-auth.guard.ts
+      Guard que protege cualquier endpoint que lo use.
+      Respeta el decorador @Public() para rutas abiertas.
+      Diferencia entre token expirado y token inválido.
+
+  • src/auth/auth.module.ts
+      Configura JwtModule con secreto y expiración desde ConfigService.
+      Registra PassportModule con estrategia 'jwt' por defecto.
+
+TABLA DE BASE DE DATOS USADAS POR SRV1:
+
+  • usuarios            — credenciales y perfil
+  • tipos_usuario       — ADMIN / ESTUDIANTE / FUNCIONARIO
+  • instituciones       — datos de la institución
+  • usuarios_instituciones — relación N:N usuario-institución
+  • refresh_tokens      — tokens de refresco con expiración y revocación
+
+SEGURIDAD ADICIONAL:
+
+  • Contraseñas: bcrypt con 10 salt rounds
+  • Rate limiting: máx. 10 req / 60 seg (ThrottlerGuard global)
+  • Helmet: cabeceras HTTP seguras (X-Frame-Options, CSP, etc.)
+  • CORS: orígenes configurables en .env
+  • Validación: class-validator con whitelist:true (campos extra rechazados)
+  • Logging: cada request/response se registra con método, ruta, status y tiempo
+  • Errores: filtro global AllExceptionsFilter (src/common/filters/) con
+    formato consistente { statusCode, message, timestamp, path }
+
+
+----------------------------------------------------------------
+  HISTORIA SRV7 — GESTIÓN DE PANTALLAS DEL SISTEMA
+  Estado: MÓDULO PREPARADO Y FUNCIONAL
+----------------------------------------------------------------
+
+DESCRIPCIÓN:
+  CRUD completo para gestionar las pantallas/vistas del sistema.
+  Protegido con autenticación JWT.
+
+ENDPOINTS IMPLEMENTADOS:
+
+  POST   /api/v1/pantallas       → Crear pantalla
+  GET    /api/v1/pantallas       → Listar todas
+  GET    /api/v1/pantallas/:id   → Obtener por ID
+  PUT    /api/v1/pantallas/:id   → Actualizar
+  DELETE /api/v1/pantallas/:id   → Eliminar
+
+  - Controller: src/pantallas/pantallas.controller.ts
+  - Service:    src/pantallas/pantallas.service.ts
+  - Repository: src/pantallas/pantallas.repository.ts
+  - DTOs:       src/pantallas/dto/create-pantalla.dto.ts
+                src/pantallas/dto/update-pantalla.dto.ts
+
+CAMPOS DEL MODELO (tabla: pantallas):
+
+  • id          UUID auto-generado (PK)
+  • nombre      Texto 1-100 chars, solo letras/números/espacios/guiones
+  • descripcion Texto opcional hasta 500 chars
+  • ruta        Ruta única, formato /ruta-valida
+  • activo      Boolean, true por defecto
+  • createdAt   Fecha automática
+  • updatedAt   Fecha automática
+
+VALIDACIONES (class-validator):
+
+  • nombre:      requerido, máx 100 chars
+                 regex: solo letras, números, espacios, guiones
+  • descripcion: opcional, máx 500 chars
+  • ruta:        requerida, única, debe empezar con /
+                 regex: solo letras, números, guiones y barras
+  • activo:      opcional en update, debe ser booleano
+
+PROTECCIÓN:
+
+  Todos los endpoints usan @UseGuards(JwtAuthGuard).
+  Se requiere token JWT válido en header Authorization.
+
+LISTO PARA CRECER:
+  • Agregar roles: usar @Roles('ADMIN') + RolesGuard cuando sea necesario
+  • Agregar paginación al findAll si la tabla crece
+  • Agregar búsqueda por nombre/ruta con query params
+
+
+----------------------------------------------------------------
+  HISTORIA SRV9 — BITÁCORA DE AUDITORÍA
+  Estado: MÓDULO PREPARADO Y FUNCIONAL
+----------------------------------------------------------------
+
+DESCRIPCIÓN:
+  Registro de acciones del sistema para auditoría.
+  Almacena quién hizo qué, cuándo y desde dónde.
+
+ENDPOINTS IMPLEMENTADOS:
+
+  POST   /api/v1/bitacora                → Registrar acción
+  GET    /api/v1/bitacora                → Listar (paginado)
+  GET    /api/v1/bitacora/:id            → Obtener por ID
+  GET    /api/v1/bitacora/usuario/:id    → Historial de un usuario
+
+  - Controller: src/bitacora/bitacora.controller.ts
+  - Service:    src/bitacora/bitacora.service.ts
+  - Repository: src/bitacora/bitacora.repository.ts
+  - DTO:        src/bitacora/dto/create-bitacora.dto.ts
+
+CAMPOS DEL MODELO (tabla: bitacoras):
+
+  • id          UUID auto-generado (PK)
+  • usuarioId   FK → usuarios.id
+  • descripcion Texto hasta 500 chars (qué ocurrió)
+  • accion      Código de acción ej: LOGIN, LOGOUT, CONSULTA_CARNET
+  • ip          IP del cliente (opcional, capturada automáticamente)
+  • fecha       Timestamp automático (DEFAULT CURRENT_TIMESTAMP)
+
+CARACTERÍSTICAS:
+
+  • Paginación: GET /bitacora?page=1&limit=20
+  • La IP puede capturarse automáticamente desde req (X-Forwarded-For)
+    usando el método registrarDesdeRequest() del servicio
+  • Incluye datos del usuario en la respuesta (join automático)
+  • Protegido con JwtAuthGuard en todos los endpoints
+
+USOS PREVISTOS:
+
+  • Registrar login/logout automáticamente (llamar desde AuthService)
+  • Auditar operaciones sensibles (eliminar, modificar usuarios)
+  • Trazabilidad por usuario o fecha
+  • Futura integración con alertas o reportes de seguridad
+
+LISTO PARA CRECER:
+  • Agregar filtros: por fecha, por acción, por IP
+  • Agregar exportación a CSV/Excel
+  • Agregar alertas automáticas ante acciones sospechosas
+  • Conectar con el módulo Auth para registro automático de logins
+
+
+----------------------------------------------------------------
+  ESTRUCTURA GENERAL DEL PROYECTO
+----------------------------------------------------------------
+
+  package.json          Dependencias y scripts npm
+  .env / .env.example   Variables de entorno (DB, JWT, etc.)
+  .gitignore            Excluye node_modules, .env, dist
+  nest-cli.json         Configuración del CLI de NestJS
+  tsconfig.json         Configuración TypeScript
+  prisma/schema.prisma  Modelos de base de datos (MySQL)
+  prisma/seed.ts        Datos de prueba con passwords hasheadas
+  database/init.sql     Script SQL manual alternativo
+  README.md             Guía completa de instalación y uso
+  docs/POSTMAN_EXAMPLES.md  Ejemplos curl y colección Postman
+
+  src/
+    main.ts             Punto de entrada, Swagger, Helmet, CORS
+    app.module.ts       Módulo raíz, registra guards/filtros globales
+    config/             Variables de entorno tipadas
+    prisma/             Servicio de conexión a base de datos
+    shared/             Tipos TypeScript y utilidades (bcrypt, fechas)
+    common/             Decoradores, filtros, interceptores, middleware
+    auth/               SRV1 completo
+    users/              Repositorio de usuarios (base para SRV10)
+    pantallas/          SRV7 preparado
+    bitacora/           SRV9 preparado
+
+
+----------------------------------------------------------------
+  CÓMO EJECUTAR
+----------------------------------------------------------------
+
+  1. npm install
+  2. Editar .env con la contraseña MySQL (ya configurado: sa12345)
+  3. npm run prisma:migrate:dev
+  4. npm run prisma:seed
+  5. npm run start:dev
+
+  Swagger: http://localhost:3000/api/docs
+
+  Credenciales de prueba:
+    admin@cuc.edu.co       / Admin@2024!       → tipoUsuario: ADMIN
+    estudiante@cuc.edu.co  / Estudiante@2024!  → tipoUsuario: ESTUDIANTE
+    funcionario@cuc.edu.co / Funcionario@2024! → tipoUsuario: FUNCIONARIO
+
+================================================================
